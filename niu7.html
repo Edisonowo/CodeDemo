@@ -1,0 +1,443 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Excel 智能批量搜索工具 (最终修复版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background-color: #f8fafc; }
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.98);
+            box-shadow: 0 10px 40px -10px rgba(0,0,0,0.1);
+            border: 1px solid #e2e8f0;
+        }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        
+        .highlight-text {
+            background-color: #fef08a;
+            color: #b45309;
+            padding: 0 2px;
+            border-radius: 2px;
+            font-weight: 700;
+        }
+        .keyword-tag {
+            display: inline-block;
+            background: #eff6ff;
+            color: #2563eb;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            margin-right: 4px;
+            margin-bottom: 4px;
+            border: 1px solid #bfdbfe;
+        }
+        .mode-switch { transition: all 0.3s ease; }
+        .mode-active { background-color: #4f46e5; color: white; border-color: #4f46e5; }
+    </style>
+</head>
+<body class="min-h-screen p-6 flex flex-col items-center">
+
+    <div class="glass-panel w-full max-w-7xl rounded-xl p-8 mb-8">
+        <!-- 标题区 -->
+        <div class="flex justify-between items-center mb-6 border-b pb-4">
+            <div>
+                <h1 class="text-2xl font-bold text-slate-800 flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
+                    Excel 智能批量搜索器
+                </h1>
+                <p class="text-slate-500 text-sm mt-1">支持单条手动搜索 & 批量任务清单自动处理</p>
+            </div>
+            <div class="flex gap-2 items-center">
+                <span id="dataStatusBadge" class="hidden bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-medium border border-green-200">✅ 数据已缓存</span>
+                <span id="fileCountBadge" class="bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-xs font-medium border border-slate-200">未选择数据源</span>
+            </div>
+        </div>
+
+        <!-- 模式切换 -->
+        <div class="flex gap-4 mb-6">
+            <button onclick="switchMode('manual')" id="btnManual" class="mode-switch mode-active px-4 py-2 rounded-lg border border-slate-200 text-sm font-medium">✍️ 手动单条搜索</button>
+            <button onclick="switchMode('batch')" id="btnBatch" class="mode-switch px-4 py-2 rounded-lg border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50">📑 批量任务清单</button>
+        </div>
+
+        <!-- 1. 数据源上传 -->
+        <div class="mb-6 p-4 bg-slate-50 rounded-lg border border-slate-200 transition-all hover:border-indigo-300">
+            <label class="block text-sm font-semibold text-slate-700 mb-2">📂 第一步：选择数据源 (B/C/D...)</label>
+            <input type="file" id="sourceInput" multiple accept=".xlsx, .xls" 
+                onchange="updateSourceStatus()"
+                class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-white file:text-indigo-600 file:border file:border-indigo-200 hover:file:bg-indigo-50 cursor-pointer"/>
+        </div>
+
+        <!-- 2. 手动搜索模式 -->
+        <div id="manualMode" class="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-6">
+            <div class="lg:col-span-9">
+                <label class="block text-sm font-semibold text-slate-700 mb-2">🔍 输入长文本 (自动分词)</label>
+                <textarea id="searchInput" rows="3" placeholder="例如：请查找用户 张三 在 2026年 的订单 8i29cby1cwnnk1q..." 
+                    class="w-full px-4 py-3 rounded-lg border border-slate-300 focus:ring-2 focus:ring-indigo-500 outline-none shadow-sm"></textarea>
+            </div>
+            <div class="lg:col-span-3 flex flex-col gap-2 justify-end">
+                <button onclick="startSmartSearch()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-3 rounded-lg font-medium shadow-md transition-all">开始搜索</button>
+            </div>
+        </div>
+
+        <!-- 3. 批量任务模式 -->
+        <div id="batchMode" class="hidden mb-6 p-4 bg-indigo-50 rounded-lg border border-indigo-100">
+            <label class="block text-sm font-semibold text-indigo-800 mb-2">📑 第二步：上传任务清单 Excel</label>
+            <p class="text-xs text-indigo-600 mb-2">要求：只有一列，第一行为表头，第二行开始为搜索长文本。</p>
+            <input type="file" id="taskInput" accept=".xlsx, .xls" 
+                class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-white file:text-indigo-600 file:border file:border-indigo-200 hover:file:bg-indigo-50 cursor-pointer"/>
+            <div class="mt-4 flex justify-end">
+                <button onclick="startBatchSearch()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg font-medium shadow-md transition-all">🚀 启动批量处理</button>
+            </div>
+        </div>
+
+        <!-- 状态与预览 -->
+        <div id="statusArea" class="hidden mb-4 p-3 rounded-lg text-sm flex items-center gap-2"></div>
+        <div id="keywordPreview" class="hidden mb-4 p-3 bg-slate-50 rounded-lg border border-slate-200">
+            <span class="text-xs font-bold text-slate-500 uppercase mr-2">当前识别条件:</span>
+            <div id="keywordTags" class="inline-block"></div>
+        </div>
+
+        <!-- 结果展示 -->
+        <div class="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm">
+            <div class="p-4 bg-slate-50 border-b flex justify-between items-center">
+                <h3 class="font-semibold text-slate-700">搜索结果预览</h3>
+                <span id="resultCount" class="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">0 条记录</span>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200" id="resultTable">
+                    <thead class="bg-slate-50" id="tableHead"></thead>
+                    <tbody class="bg-white divide-y divide-slate-100" id="tableBody">
+                        <tr><td colspan="10" class="px-6 py-16 text-center text-slate-400">等待操作...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div class="mt-6 flex justify-end">
+             <button onclick="exportToExcel()" id="exportBtn" disabled
+                class="bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white px-6 py-3 rounded-lg font-medium shadow-md transition-all flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                导出所有结果
+            </button>
+        </div>
+    </div>
+
+
+<script>
+    let globalResults = []; 
+
+    function updateSourceStatus() {
+        const files = document.getElementById('sourceInput').files;
+        const badge = document.getElementById('fileCountBadge');
+        if (files.length > 0) {
+            badge.innerText = `✅ 已加载 ${files.length} 个数据源文件`;
+            badge.className = "bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-medium border border-green-200";
+        } else {
+            badge.innerText = "未选择数据源";
+            badge.className = "bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-xs font-medium border border-slate-200";
+        }
+    }
+
+    function switchMode(mode) {
+        document.getElementById('manualMode').classList.toggle('hidden', mode !== 'manual');
+        document.getElementById('batchMode').classList.toggle('hidden', mode !== 'batch');
+        document.getElementById('btnManual').classList.toggle('mode-active', mode === 'manual');
+        document.getElementById('btnBatch').classList.toggle('mode-active', mode === 'batch');
+        if(mode === 'batch') document.getElementById('btnBatch').classList.remove('text-slate-600');
+        else document.getElementById('btnManual').classList.remove('text-slate-600');
+    }
+
+    // ✅ 修改版：中文逐字，英文/数字/#号连写视为一个词
+    function extractKeywords(text) {
+        if (!text) return [];
+        const safeText = String(text);
+        
+        const keywords = [];
+        
+        // 正则解释：
+        // 1. [\u4e00-\u9fa5] : 匹配单个中文字符
+        // 2. [a-zA-Z0-9#]+   : 匹配连续的一个或多个 字母、数字 或 # 号
+        // |                  : 或者
+        const regex = /[\u4e00-\u9fa5]|[a-zA-Z0-9#]+/g;
+        const matches = safeText.match(regex);
+        
+        if (matches) {
+            matches.forEach(match => {
+                // 如果匹配到的是中文，match 本身就是单字（因为正则里没加+）
+                // 如果匹配到的是英数#组合，match 就是整个字符串
+                if (match.trim().length > 0) {
+                    keywords.push(match);
+                }
+            });
+        }
+        
+        // 去重并过滤空值
+        return [...new Set(keywords)].filter(k => k.length > 0);
+    }
+
+    async function startSmartSearch() {
+        const files = document.getElementById('sourceInput').files;
+        if (files.length === 0) { alert("请先在第一步选择数据源文件！"); return; }
+
+        const rawText = document.getElementById('searchInput').value;
+        const keywords = extractKeywords(rawText);
+        if (keywords.length === 0) { alert("未识别到有效关键词！"); return; }
+        
+        showStatus(true, "正在手动搜索...");
+        globalResults = []; 
+        
+        try {
+            await runSearch(keywords, "手动搜索");
+            renderResults(globalResults, keywords);
+            updateUIAfterSearch();
+        } catch (e) {
+            console.error(e);
+            showStatus(false, e.message, "error");
+        }
+    }
+
+    async function startBatchSearch() {
+        const files = document.getElementById('sourceInput').files;
+        if (files.length === 0) { alert("请先在第一步选择数据源文件！"); return; }
+
+        const taskFile = document.getElementById('taskInput').files[0];
+        if (!taskFile) { alert("请先上传任务清单 Excel！"); return; }
+
+        showStatus(true, "正在解析任务清单...");
+        try {
+            const tasks = await readTaskFile(taskFile);
+            if (tasks.length === 0) { alert("任务清单中没有有效的搜索文本！"); return; }
+
+            globalResults = []; 
+            
+            for (let i = 0; i < tasks.length; i++) {
+                const taskText = tasks[i];
+                const keywords = extractKeywords(String(taskText));
+                
+                if (keywords.length > 0) {
+                    if(i % 5 === 0) showStatus(true, `正在处理第 ${i+1}/${tasks.length} 个任务...`);
+                    await runSearch(keywords, taskText);
+                }
+            }
+            
+            renderResults(globalResults, []);
+            updateUIAfterSearch();
+
+        } catch (err) {
+            console.error(err);
+            showStatus(false, `批量处理出错: ${err.message}`, "error");
+        }
+    }
+
+    async function runSearch(keywords, label) {
+        const files = document.getElementById('sourceInput').files;
+        if (label === "手动搜索") {
+            document.getElementById('keywordPreview').classList.remove('hidden');
+            document.getElementById('keywordTags').innerHTML = keywords.map(k => `<span class="keyword-tag">${k}</span>`).join('');
+        }
+
+        for (let i = 0; i < files.length; i++) {
+            await processFile(files[i], keywords, label);
+        }
+    }
+
+    function readTaskFile(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                const jsonData = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: "" });
+                const tasks = jsonData.slice(1).map(row => row[0]).filter(t => t != null && t !== "");
+                resolve(tasks);
+            };
+            reader.onerror = reject;
+            reader.readAsArrayBuffer(file);
+        });
+    }
+
+    // ✅ 修改版：匹配逻辑
+    function processFile(file, keywords, searchLabel) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    
+                    workbook.SheetNames.forEach(sheetName => {
+                        const worksheet = workbook.Sheets[sheetName];
+                        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+                        if (jsonData.length < 2) return;
+                        
+                        const headers = jsonData[0];
+                        for (let i = 1; i < jsonData.length; i++) {
+                            const rowArray = jsonData[i];
+                            // 将整行转换为字符串，用空格分隔，便于后续边界匹配
+                            const rowString = rowArray.map(cell => String(cell == null ? "" : cell)).join(" ");
+                            
+                            // 检查所有关键字是否都满足条件
+                            const isMatch = keywords.every(kw => {
+                                const lowerKw = kw.toLowerCase();
+                                const lowerRow = rowString.toLowerCase();
+                                
+                                // 判断关键字类型
+                                // 如果关键字包含中文，使用模糊包含
+                                // 如果关键字是纯 英文/数字/#，建议使用更精准的匹配（可选，这里保持统一包含以兼容混合情况）
+                                
+                                // 策略：
+                                // 1. 中文关键字：直接 includes
+                                // 2. 英数#关键字：如果它是纯数字或纯特殊组合，可以考虑边界匹配，但为了通用性，
+                                //    这里我们采用：如果关键字中包含非中文，且长度>1，通常用户希望精确匹配该串。
+                                //    但由于 Excel 内容可能没有空格分隔（如 WME01C04），includes 是最安全的。
+                                
+                                return lowerRow.includes(lowerKw);
+                            });
+                            
+                            if (isMatch) {
+                                globalResults.push({
+                                    _searchLabel: searchLabel,
+                                    _sourceFile: file.name,
+                                    _sheetName: sheetName,
+                                    _headers: headers,
+                                    _rowData: rowArray
+                                });
+                            }
+                        }
+                    });
+                    resolve();
+                } catch (err) { reject(err); }
+            };
+            reader.onerror = reject;
+            reader.readAsArrayBuffer(file);
+        });
+    }
+
+    function renderResults(results, keywords) {
+        const thead = document.getElementById('tableHead');
+        const tbody = document.getElementById('tableBody');
+        const countSpan = document.getElementById('resultCount');
+        
+        countSpan.innerText = `${results.length} 条记录`;
+        thead.innerHTML = '';
+        tbody.innerHTML = '';
+
+        if (results.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="10" class="px-6 py-12 text-center text-slate-500">未找到匹配数据</td></tr>`;
+            return;
+        }
+
+        const baseHeaders = results[0]._headers;
+        const colCount = Math.max(baseHeaders.length, 5); 
+        
+        let headerHtml = `
+            <tr>
+                <th class="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider bg-slate-50 sticky left-0 z-20 border-r w-32 shadow-sm">搜索任务</th>
+                <th class="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider bg-slate-50 sticky left-[128px] z-20 border-r w-32 shadow-sm">来源文件</th>
+                <th class="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider bg-slate-50 sticky left-[220px] z-20 border-r w-20 shadow-sm">Sheet</th>
+        `;
+        
+        for(let i=0; i<colCount; i++) {
+            const hName = baseHeaders[i] || `Column_${i+1}`;
+            headerHtml += `<th class="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider whitespace-nowrap min-w-[100px] border-b">${hName}</th>`;
+        }
+        headerHtml += '</tr>';
+        thead.innerHTML = headerHtml;
+
+        const fragment = document.createDocumentFragment();
+        
+        results.forEach(item => {
+            const tr = document.createElement('tr');
+            tr.className = "hover:bg-indigo-50 transition-colors group";
+            
+            let rowHtml = '';
+            let labelDisplay = item._searchLabel.length > 15 ? item._searchLabel.substring(0, 15) + "..." : item._searchLabel;
+            rowHtml += `<td class="px-4 py-3 text-xs text-indigo-600 font-medium border-r bg-white group-hover:bg-indigo-50 sticky left-0 z-10 truncate max-w-[120px]" title="${item._searchLabel}">${labelDisplay}</td>`;
+            rowHtml += `<td class="px-4 py-3 text-xs text-slate-600 border-r bg-white group-hover:bg-indigo-50 sticky left-[128px] z-10 truncate max-w-[120px]">${item._sourceFile}</td>`;
+            rowHtml += `<td class="px-4 py-3 text-xs text-slate-500 border-r bg-white group-hover:bg-indigo-50 sticky left-[220px] z-10">${item._sheetName}</td>`;
+
+            for(let i=0; i<colCount; i++) {
+                let cellData = item._rowData[i];
+                let cellStr = String(cellData === undefined || cellData === null ? "" : cellData);
+                let displayStr = cellStr;
+
+                // 高亮逻辑
+                if (keywords.length > 0) {
+                    keywords.forEach(kw => {
+                        if (!kw) return;
+                        // 简单的高亮替换，不区分类型，直接替换匹配到的字符串
+                        // 注意：如果关键字是 "01"，它会高亮 "201" 中的 "01"。如果需要精确高亮，需引入边界逻辑。
+                        // 鉴于 Excel 数据格式复杂，这里保持通用高亮。
+                        const lowerKw = kw.toLowerCase();
+                        const lowerCell = cellStr.toLowerCase();
+                        
+                        if (lowerCell.includes(lowerKw)) {
+                            // 使用 replaceAll 或循环替换所有出现的位置
+                            // 为了保留原始大小写进行显示，我们使用正则 gi
+                            const regex = new RegExp(`(${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+                            displayStr = displayStr.replace(regex, '<span class="highlight-text">$1</span>');
+                        }
+                    });
+                }
+                rowHtml += `<td class="px-4 py-3 text-sm text-slate-700 whitespace-nowrap max-w-xs truncate" title="${cellData}">${displayStr}</td>`;
+            }
+            
+            tr.innerHTML = rowHtml;
+            fragment.appendChild(tr);
+        });
+        
+        tbody.appendChild(fragment);
+    }
+
+    function updateUIAfterSearch() {
+        showStatus(false, `处理完成！共找到 ${globalResults.length} 条记录。`, "success");
+        document.getElementById('exportBtn').disabled = globalResults.length === 0;
+        if(globalResults.length > 0) document.getElementById('dataStatusBadge').classList.remove('hidden');
+    }
+
+    function exportToExcel() {
+        if (globalResults.length === 0) {
+            alert("当前没有可导出的搜索结果。");
+            return;
+        }
+        
+        const exportRows = globalResults.map(item => {
+            const rowObj = { 
+                "搜索任务描述": item._searchLabel, 
+                "来源文件": item._sourceFile, 
+                "Sheet名称": item._sheetName 
+            };
+            item._headers.forEach((header, index) => {
+                const colName = header || `Column_${index+1}`;
+                rowObj[colName] = item._rowData[index];
+            });
+            return rowObj;
+        });
+        
+        const ws = XLSX.utils.json_to_sheet(exportRows);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "批量搜索结果汇总");
+        XLSX.writeFile(wb, `批量搜索汇总_${new Date().getTime()}.xlsx`);
+    }
+
+    function showStatus(isLoading, msg, type = "info") {
+        const el = document.getElementById('statusArea');
+        el.classList.remove('hidden');
+        if (isLoading) {
+            el.className = "mb-4 p-3 rounded-lg bg-blue-50 text-blue-700 text-sm flex items-center gap-2";
+            el.innerHTML = `<svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> ${msg}`;
+        } else {
+            el.className = `mb-4 p-3 rounded-lg text-sm flex items-center gap-2 ${type === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`;
+            el.innerText = msg;
+        }
+    }
+</script>
+
+</body>
+</html>
